@@ -4,10 +4,11 @@
 # Dataset: cleaned_ai_student_data (182 valid responses)
 # ==============================================================
 
+import os
+import io
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -16,7 +17,6 @@ from scipy.stats import spearmanr
 # --------------------------- PAGE SETUP ---------------------------
 st.set_page_config(
     page_title="AI Usage | Research Dashboard",
-    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -69,6 +69,7 @@ div[data-testid="stMetric"]:hover {{
 div[data-testid="stMetric"] label {{color:{MUTED}!important;}}
 div[data-testid="stMetric"] [data-testid="stMetricValue"] {{color:{TEXT}!important;font-family:'Space Grotesk';}}
 div[data-testid="stPlotlyChart"] {{
+div[data-testid="stPlotlyChart"] .modebar {{display:none !important;}}
   background:rgba(17,26,46,.72); border:1px solid rgba(102,140,255,.18);
   border-radius:16px; padding:9px; transition:all .25s ease;
   animation:fadeUp .55s ease both;
@@ -122,22 +123,22 @@ hr {{border-color:rgba(102,140,255,.20);}}
 
 # --------------------------- DATA LOADING ---------------------------
 @st.cache_data
-def load_data():
+def load_data(uploaded_bytes=None):
     candidates = [
         "cleaned_ai_student_data (2).csv",
         "cleaned_ai_student_data.csv",
         "data/cleaned_ai_student_data (2).csv",
         "data/cleaned_ai_student_data.csv",
     ]
-    for file in candidates:
-        if os.path.exists(file):
-            data = pd.read_csv(file)
-            break
+    if uploaded_bytes is not None:
+        data = pd.read_csv(io.BytesIO(uploaded_bytes))
     else:
-        uploaded = st.session_state.get("uploaded_dataset")
-        if uploaded is None:
+        for file in candidates:
+            if os.path.exists(file):
+                data = pd.read_csv(file)
+                break
+        else:
             return None
-        data = pd.read_csv(uploaded)
 
     # Normalize likely column names and types
     data.columns = [str(c).strip().lower() for c in data.columns]
@@ -175,20 +176,20 @@ def load_data():
 
 # allow a CSV upload if app and dataset are not in the same folder
 with st.sidebar:
-    st.markdown("## 🤖 AI RESEARCH HUB")
+    st.markdown("## AI RESEARCH HUB")
     st.caption("PRG405 · Introduction to Data Science")
     nav = st.radio("NAVIGATION", ["Dashboard", "Research Analysis"], index=0)
     st.markdown("---")
     st.markdown("### DATA SOURCE")
-    st.caption("Using the cleaned survey dataset (182 valid records).")
     uploaded_csv = st.file_uploader("Or upload your cleaned CSV", type=["csv"])
-    if uploaded_csv is not None:
-        st.session_state["uploaded_dataset"] = uploaded_csv
 
-df = load_data()
+df = load_data(uploaded_csv.getvalue() if uploaded_csv is not None else None)
 if df is None:
     st.warning("Place **cleaned_ai_student_data (2).csv** in the same folder as this app, or upload the cleaned CSV in the sidebar.")
     st.stop()
+
+with st.sidebar:
+    st.caption(f"Loaded dataset: {len(df):,} records")
 
 # --------------------------- FILTERS ---------------------------
 with st.sidebar:
@@ -197,12 +198,22 @@ with st.sidebar:
     years = sorted(df["academic_year"].dropna().unique().tolist())
     genders = sorted(df["gender"].dropna().unique().tolist())
     programs = sorted(df["program"].dropna().unique().tolist())
-    selected_years = st.multiselect("Academic year", years, default=years)
-    selected_genders = st.multiselect("Gender", genders, default=genders)
-    selected_programs = st.multiselect("Programme", programs, default=programs)
+
+    # Initialize filter state once so the reset button really restores all values.
+    for key, options in [("filter_years", years), ("filter_genders", genders), ("filter_programs", programs)]:
+        if key not in st.session_state:
+            st.session_state[key] = options
+
+    def reset_filters():
+        st.session_state["filter_years"] = years
+        st.session_state["filter_genders"] = genders
+        st.session_state["filter_programs"] = programs
+
+    selected_years = st.multiselect("Academic year", years, key="filter_years")
+    selected_genders = st.multiselect("Gender", genders, key="filter_genders")
+    selected_programs = st.multiselect("Programme", programs, key="filter_programs")
     st.caption("Filters update the charts and summary indicators.")
-    if st.button("↺ Reset all filters", use_container_width=True):
-        st.rerun()
+    st.button("↺ Reset all filters", use_container_width=True, on_click=reset_filters)
 
 filtered = df[
     df["academic_year"].isin(selected_years) &
@@ -212,17 +223,42 @@ filtered = df[
 
 # --------------------------- CHART HELPERS ---------------------------
 def chart_layout(fig, height=360, legend=True):
+    # Horizontal charts need extra space for long category names and value labels.
+    is_horizontal = any(
+        getattr(trace, "orientation", None) == "h"
+        for trace in fig.data
+    )
+    margins = (
+        dict(l=135, r=95, t=62, b=48)
+        if is_horizontal else dict(l=48, r=48, t=62, b=48)
+    )
     fig.update_layout(
-        height=height, paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT, family="DM Sans"),
-        margin=dict(l=18,r=18,t=48,b=25),
-        title_font=dict(size=15,color=TEXT,family="Space Grotesk"),
-        legend=dict(bgcolor="rgba(0,0,0,0)",font=dict(color=MUTED,size=10),
-                    orientation="h",yanchor="bottom",y=1.02,xanchor="right",x=1),
+        height=height,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=TEXT, family="DM Sans", size=11),
+        margin=margins,
+        title_font=dict(size=15, color=TEXT, family="Space Grotesk"),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(color=MUTED, size=10),
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="right", x=1
+        ),
         showlegend=legend
     )
-    fig.update_xaxes(gridcolor="rgba(155,174,201,.10)",zerolinecolor="rgba(155,174,201,.12)")
-    fig.update_yaxes(gridcolor="rgba(155,174,201,.10)",zerolinecolor="rgba(155,174,201,.12)")
+    fig.update_xaxes(
+        gridcolor="rgba(155,174,201,.10)",
+        zerolinecolor="rgba(155,174,201,.12)",
+        automargin=True,
+        tickfont=dict(size=10)
+    )
+    fig.update_yaxes(
+        gridcolor="rgba(155,174,201,.10)",
+        zerolinecolor="rgba(155,174,201,.12)",
+        automargin=True,
+        tickfont=dict(size=10)
+    )
     return fig
 
 def multi_counts(data, col):
@@ -274,11 +310,49 @@ if nav == "Dashboard":
     st.markdown('<span class="pill">LIVE FILTERED VIEW</span>', unsafe_allow_html=True)
     section("Research at a glance", "Key indicators update when you change the filters.")
     c1,c2,c3,c4,c5 = st.columns(5)
-    with c1: metric_card("👥 Respondents", f"{n:,}")
-    with c2: metric_card("🎂 Average age", f"{mean_age:.1f}" if pd.notna(mean_age) else "—", "years")
-    with c3: metric_card("⏱️ Avg. weekly AI use", f"{mean_hours:.1f}" if pd.notna(mean_hours) else "—", "hours")
-    with c4: metric_card("⭐ Satisfaction", f"{mean_sat:.2f}/5" if pd.notna(mean_sat) else "—")
-    with c5: metric_card("✦ Perceived usefulness", f"{mean_use:.2f}/5" if pd.notna(mean_use) else "—")
+    with c1: metric_card(" Respondents", f"{n:,}")
+    with c2: metric_card(" Average age", f"{mean_age:.1f}" if pd.notna(mean_age) else "—", "years")
+    with c3: metric_card(" Avg. weekly AI use", f"{mean_hours:.1f}" if pd.notna(mean_hours) else "—", "hours")
+    with c4: metric_card(" Satisfaction", f"{mean_sat:.2f}/5" if pd.notna(mean_sat) else "—")
+    with c5: metric_card(" Perceived usefulness", f"{mean_use:.2f}/5" if pd.notna(mean_use) else "—")
+
+    # Dynamic findings make the main patterns clear without requiring users to inspect every chart.
+    tool_summary = multi_counts(filtered, "tools_used").sort_values("Students", ascending=False)
+    purpose_summary = multi_counts(filtered, "use_cases").sort_values("Students", ascending=False)
+    benefit_summary = multi_counts(filtered, "benefits").sort_values("Students", ascending=False)
+    challenge_summary = multi_counts(filtered, "challenges").sort_values("Students", ascending=False)
+    common_frequency = filtered["frequency"].value_counts()
+    high_sat = filtered["satisfaction"].dropna()
+    high_sat_pct = (high_sat.ge(4).mean() * 100) if len(high_sat) else np.nan
+
+    section("Key findings", "A quick interpretation of the selected respondents.")
+    insight_items = []
+    if not tool_summary.empty:
+        r = tool_summary.iloc[0]
+        insight_items.append(f"**Most used AI tool:** {r['Response']} ({int(r['Students'])} selections; {r['Percent of respondents']:.1f}% of respondents).")
+    if not common_frequency.empty:
+        label = common_frequency.idxmax()
+        insight_items.append(f"**Most common usage frequency:** {label} ({int(common_frequency.max())} students; {common_frequency.max()/n*100:.1f}%).")
+    if not purpose_summary.empty:
+        r = purpose_summary.iloc[0]
+        insight_items.append(f"**Main purpose:** {r['Response']} ({int(r['Students'])} selections; {r['Percent of respondents']:.1f}%).")
+    if not benefit_summary.empty:
+        r = benefit_summary.iloc[0]
+        insight_items.append(f"**Most reported benefit:** {r['Response']} ({int(r['Students'])} selections).")
+    if not challenge_summary.empty:
+        r = challenge_summary.iloc[0]
+        insight_items.append(f"**Most reported challenge:** {r['Response']} ({int(r['Students'])} selections).")
+    if pd.notna(high_sat_pct):
+        insight_items.append(f"**Positive satisfaction ratings:** {high_sat_pct:.1f}% rated satisfaction 4 or 5 out of 5.")
+    st.markdown("\n".join([f"- {item}" for item in insight_items]))
+
+    section("Recommendations", "Practical suggestions connected to the benefits and challenges examined in the survey.")
+    st.markdown("""
+- **Verify AI-generated information:** compare important facts and explanations with reliable academic or official sources.
+- **Protect privacy:** avoid entering personal, confidential, or sensitive information into AI tools.
+- **Use AI as a learning support:** use it to clarify concepts, generate ideas, and receive guidance while completing and understanding your own work.
+- **Practise responsible academic use:** follow lecturers' instructions and the institution's expectations for acknowledging AI assistance.
+""")
 
     st.markdown("---")
     section("01 · Respondent profile", "Understand who participated in the survey.")
@@ -288,7 +362,11 @@ if nav == "Dashboard":
         gender_counts.columns=["Gender","Students"]
         fig=px.pie(gender_counts,names="Gender",values="Students",hole=.66,
                    color_discrete_sequence=[CYAN,PURPLE,ORANGE,BLUE],title="Gender distribution")
-        fig.update_traces(textposition="outside",textinfo="percent+label",marker=dict(line=dict(color=BG,width=2)))
+        fig.update_traces(
+            textposition="inside",
+            textinfo="percent",
+            marker=dict(line=dict(color=BG, width=2))
+        )
         fig.add_annotation(text=f"<b>{n}</b><br><sup>students</sup>",showarrow=False,
                            font=dict(size=17,color=TEXT))
         st.plotly_chart(chart_layout(fig,330),use_container_width=True)
@@ -310,7 +388,7 @@ if nav == "Dashboard":
         st.plotly_chart(chart_layout(fig,330,False),use_container_width=True)
 
     st.markdown("---")
-    section("02 · AI tool adoption", "Multiple selections are counted separately; percentages can exceed 100% when added.")
+    section("02 · AI tool adoption", "Multiple selections are counted separately. Percentages are based on respondents and may add to more than 100%.")
     t1,t2 = st.columns([1.35,1])
     with t1:
         tc=multi_counts(filtered,"tools_used").sort_values("Students",ascending=True)
@@ -325,9 +403,12 @@ if nav == "Dashboard":
     with t2:
         fc=filtered["frequency"].value_counts().reindex(["Rarely","Sometimes","Very Often","Everyday"]).dropna().reset_index()
         fc.columns=["Usage frequency","Students"]
-        fig=px.funnel(fc,x="Students",y="Usage frequency",color="Usage frequency",
-                      color_discrete_sequence=[BLUE,CYAN,PURPLE,PINK],title="How often students use AI")
-        st.plotly_chart(chart_layout(fig,360),use_container_width=True)
+        fig=px.bar(fc,x="Students",y="Usage frequency",orientation="h",color="Usage frequency",
+                   color_discrete_sequence=[BLUE,CYAN,PURPLE,PINK],title="How often students use AI",
+                   text="Students",category_orders={"Usage frequency":["Everyday","Very Often","Sometimes","Rarely"]})
+        fig.update_layout(showlegend=False,xaxis_title="Number of students",yaxis_title="")
+        fig.update_traces(textposition="outside",cliponaxis=False)
+        st.plotly_chart(chart_layout(fig,360,False),use_container_width=True)
         if not tc.empty:
             st.markdown(f'<div class="insight">Most selected tool: <b>{tc.iloc[-1]["Response"]}</b> '
                         f'({int(tc.iloc[-1]["Students"])} respondents, {tc.iloc[-1]["Percent of respondents"]:.1f}%).</div>',
@@ -342,14 +423,15 @@ if nav == "Dashboard":
         (c,"challenges","Reported challenges",PINK)
     ]:
         with col:
-            tbl=multi_counts(filtered,field).sort_values("Students",ascending=True).tail(9)
+            tbl=multi_counts(filtered,field).sort_values("Students",ascending=True)
             if not tbl.empty:
+                tbl["Label"] = tbl["Students"].astype(str) + " students"
                 fig=px.bar(tbl,x="Students",y="Response",orientation="h",color="Response",
-                           color_discrete_sequence=PALETTE,title=title,
+                           color_discrete_sequence=PALETTE,title=title,text="Label",
                            hover_data={"Percent of respondents":":.1f"})
-                fig.update_layout(showlegend=False,yaxis_title="",xaxis_title="Students")
-                fig.update_traces(marker_line_width=0)
-                st.plotly_chart(chart_layout(fig,max(340,30*len(tbl)+110),False),use_container_width=True)
+                fig.update_layout(showlegend=False,yaxis_title="",xaxis_title="Number of students")
+                fig.update_traces(marker_line_width=0,textposition="outside",cliponaxis=False)
+                st.plotly_chart(chart_layout(fig, max(360, 34 * len(tbl) + 120), False), use_container_width=True)
 
     st.markdown("---")
     section("04 · Satisfaction and perceived usefulness", "Ratings use the original 1–5 survey scale.")
@@ -367,7 +449,7 @@ if nav == "Dashboard":
             st.plotly_chart(chart_layout(fig,300,False),use_container_width=True)
 
     st.markdown("---")
-    section("05 · Usage patterns and group comparisons", "Compare weekly hours and ratings across student groups.")
+    section("05 · Usage patterns and group comparisons", "Compare weekly hours and average ratings across academic years. The line connects group averages; it is not a time-series trend.")
     g1,g2=st.columns(2)
     with g1:
         fig=px.box(filtered,x="academic_year",y="hours_per_week_iqr_capped",
@@ -402,22 +484,26 @@ else:
     st.markdown('<div class="insight"><b>Research scope:</b> This project describes AI tool usage among the survey respondents. '
                 'The results should not automatically be generalized to all college students.</div>',unsafe_allow_html=True)
 
-    # Dedicated relationship test is displayed openly here (not hidden inside a tab).
-    section("Hypothesis testing · AI usage frequency and student satisfaction",
-            "Spearman's rank correlation, following the hypothesis test in your analysis notebook.")
-    st.markdown("**Research question:** Is there a relationship between AI tool usage frequency and students' satisfaction?", unsafe_allow_html=True)
-    st.markdown("**H₀ (Null hypothesis):** There is no statistically significant relationship between AI usage frequency and student satisfaction.")
-    st.markdown("**H₁ (Alternative hypothesis):** There is a statistically significant relationship between AI usage frequency and student satisfaction.")
-    st.caption("Frequency is coded in its natural order: Rarely = 1, Sometimes = 2, Very Often = 3, Everyday = 4. Significance level: α = 0.05.")
+    # RQ5: formal hypothesis test for satisfaction, plus an additional usefulness analysis.
+    section("RQ5 · Relationships between AI usage, satisfaction and usefulness",
+            "Spearman's rank correlation is used because usage frequency is ordinal and ratings use a 1–5 scale.")
+    st.markdown("**Research question:** Is there a relationship between AI tool usage and students’ perceived satisfaction or usefulness?")
+    st.markdown("**Formal hypothesis (satisfaction)**")
+    st.markdown("**H₀:** There is no statistically significant relationship between the frequency of AI tool usage and students’ perceived satisfaction.")
+    st.markdown("**H₁:** There is a statistically significant relationship between the frequency of AI tool usage and students’ perceived satisfaction.")
+    st.caption("Usage frequency is coded in its natural order: Rarely = 1, Sometimes = 2, Very Often = 3, Everyday = 4. Significance level: α = 0.05. The usefulness analysis is additional and does not introduce a new formal hypothesis.")
 
+    freq_labels = {1: "Rarely", 2: "Sometimes", 3: "Very Often", 4: "Everyday"}
+
+    # Formal hypothesis test: frequency and satisfaction.
     relationship_data = filtered[["frequency_score", "satisfaction"]].copy()
     relationship_data["satisfaction"] = pd.to_numeric(relationship_data["satisfaction"], errors="coerce")
     relationship_data = relationship_data.dropna()
+    st.markdown("### Formal hypothesis test · Usage frequency and satisfaction")
     if (len(relationship_data) >= 3 and relationship_data["frequency_score"].nunique() > 1
             and relationship_data["satisfaction"].nunique() > 1):
         rho, p_value = spearmanr(relationship_data["frequency_score"], relationship_data["satisfaction"])
         decision = "Reject H₀" if p_value < 0.05 else "Fail to reject H₀"
-        significance = "Statistically significant" if p_value < 0.05 else "Not statistically significant"
         direction = "positive" if rho > 0 else "negative" if rho < 0 else "no monotonic"
         magnitude = abs(rho)
         strength = "very weak" if magnitude < 0.20 else "weak" if magnitude < 0.40 else "moderate" if magnitude < 0.60 else "strong"
@@ -426,31 +512,75 @@ else:
         with m2: metric_card("p-value", f"{p_value:.4f}")
         with m3: metric_card("Valid paired responses", f"{len(relationship_data)}")
         with m4: metric_card("Test decision", decision)
-        st.markdown(f'<div class="insight"><b>{significance} at α = 0.05.</b> The result shows a {strength} {direction} association between AI usage frequency and student satisfaction. {decision}.</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="insight"><b>Interpretation:</b> The association is {strength} and {direction} '
+            f'(ρ = {rho:.3f}). The p-value is {p_value:.4f}, compared with α = 0.05. '
+            f'<b>Decision: {decision}.</b> '
+            f'{"There is evidence of a statistically significant association in this sample." if p_value < 0.05 else "There is insufficient evidence of a statistically significant relationship in this sample. This does not prove that no relationship exists."} '
+            'Correlation does not establish cause and effect.</div>', unsafe_allow_html=True)
 
         plotdata = relationship_data.copy()
-        freq_labels = {1: "Rarely", 2: "Sometimes", 3: "Very Often", 4: "Everyday"}
         plotdata["Frequency category"] = plotdata["frequency_score"].map(freq_labels)
         rng_x = np.random.default_rng(12)
         rng_y = np.random.default_rng(21)
         plotdata["Frequency jitter"] = plotdata["frequency_score"] + rng_x.uniform(-0.10, 0.10, len(plotdata))
-        plotdata["Satisfaction jitter"] = plotdata["satisfaction"] + rng_y.uniform(-0.08, 0.08, len(plotdata))
+        plotdata["Rating jitter"] = plotdata["satisfaction"] + rng_y.uniform(-0.08, 0.08, len(plotdata))
         mean_scores = plotdata.groupby("frequency_score")["satisfaction"].mean().reset_index()
-        fig = px.scatter(plotdata, x="Frequency jitter", y="Satisfaction jitter", color="Frequency category",
+        fig = px.scatter(plotdata, x="Frequency jitter", y="Rating jitter", color="Frequency category",
                          color_discrete_map={"Rarely": BLUE, "Sometimes": CYAN, "Very Often": PURPLE, "Everyday": PINK},
                          hover_data={"Frequency category": True, "frequency_score": False,
-                                     "Frequency jitter": False, "Satisfaction jitter": False},
-                         title="Relationship between AI usage frequency and satisfaction")
+                                     "Frequency jitter": False, "Rating jitter": False},
+                         title="AI usage frequency and student satisfaction")
         fig.add_trace(go.Scatter(x=mean_scores["frequency_score"], y=mean_scores["satisfaction"],
                                  mode="lines+markers", name="Mean satisfaction",
                                  line=dict(color=ORANGE, width=3), marker=dict(size=10)))
-        fig.update_xaxes(tickvals=[1,2,3,4], ticktext=["Rarely","Sometimes","Very Often","Everyday"],
-                         title="AI usage frequency")
+        fig.update_xaxes(tickvals=[1,2,3,4], ticktext=["Rarely","Sometimes","Very Often","Everyday"], title="AI usage frequency")
         fig.update_yaxes(range=[0.7,5.3], dtick=1, title="Student satisfaction (1–5)")
-        st.plotly_chart(chart_layout(fig, 450), use_container_width=True)
-        st.markdown("**Interpretation:** Spearman's rank correlation checks whether higher AI usage frequency tends to be associated with higher or lower satisfaction. It does not prove that usage frequency causes satisfaction.")
+        st.plotly_chart(chart_layout(fig, 420), use_container_width=True)
     else:
-        st.warning("There are not enough distinct paired responses in the current filtered sample to calculate Spearman's rank correlation. Adjust the sidebar filters.")
+        st.warning("There are not enough distinct paired satisfaction responses to calculate Spearman's rank correlation for the current filters.")
+
+    # Additional RQ5 analysis: frequency and perceived usefulness. This runs independently.
+    st.markdown("### Additional relationship analysis · Usage frequency and perceived usefulness")
+    usefulness_data = filtered[["frequency_score", "usefulness"]].copy()
+    usefulness_data["usefulness"] = pd.to_numeric(usefulness_data["usefulness"], errors="coerce")
+    usefulness_data = usefulness_data.dropna()
+    if (len(usefulness_data) >= 3 and usefulness_data["frequency_score"].nunique() > 1
+            and usefulness_data["usefulness"].nunique() > 1):
+        use_rho, use_p = spearmanr(usefulness_data["frequency_score"], usefulness_data["usefulness"])
+        use_result = "Statistically significant" if use_p < 0.05 else "Not statistically significant"
+        use_direction = "positive" if use_rho > 0 else "negative" if use_rho < 0 else "no monotonic"
+        u1, u2, u3 = st.columns(3)
+        with u1: metric_card("Usefulness Spearman's rho", f"{use_rho:.3f}")
+        with u2: metric_card("Usefulness p-value", f"{use_p:.4f}")
+        with u3: metric_card("Usefulness result", use_result)
+        st.markdown(
+            f'<div class="insight"><b>Interpretation:</b> The association between usage frequency and perceived usefulness is {use_direction} '
+            f'(ρ = {use_rho:.3f}) and {use_result.lower()} at α = 0.05. '
+            f'{"There is evidence of a statistically significant association in this sample." if use_p < 0.05 else "There is insufficient evidence of a statistically significant association in this sample."} '
+            'This is an additional analysis, not a second formal hypothesis. Correlation does not show that frequent AI use causes greater perceived usefulness.</div>',
+            unsafe_allow_html=True)
+
+        use_plot = usefulness_data.copy()
+        use_plot["Frequency category"] = use_plot["frequency_score"].map(freq_labels)
+        rng_ux = np.random.default_rng(32)
+        rng_uy = np.random.default_rng(42)
+        use_plot["Frequency jitter"] = use_plot["frequency_score"] + rng_ux.uniform(-0.10, 0.10, len(use_plot))
+        use_plot["Usefulness jitter"] = use_plot["usefulness"] + rng_uy.uniform(-0.08, 0.08, len(use_plot))
+        use_means = use_plot.groupby("frequency_score")["usefulness"].mean().reset_index()
+        use_fig = px.scatter(use_plot, x="Frequency jitter", y="Usefulness jitter", color="Frequency category",
+                             color_discrete_map={"Rarely": BLUE, "Sometimes": CYAN, "Very Often": PURPLE, "Everyday": PINK},
+                             hover_data={"Frequency category": True, "frequency_score": False,
+                                         "Frequency jitter": False, "Usefulness jitter": False},
+                             title="AI usage frequency and perceived usefulness")
+        use_fig.add_trace(go.Scatter(x=use_means["frequency_score"], y=use_means["usefulness"],
+                                     mode="lines+markers", name="Mean usefulness",
+                                     line=dict(color=ORANGE, width=3), marker=dict(size=10)))
+        use_fig.update_xaxes(tickvals=[1,2,3,4], ticktext=["Rarely","Sometimes","Very Often","Everyday"], title="AI usage frequency")
+        use_fig.update_yaxes(range=[0.7,5.3], dtick=1, title="Perceived usefulness (1–5)")
+        st.plotly_chart(chart_layout(use_fig, 420), use_container_width=True)
+    else:
+        st.info("There are not enough distinct paired usefulness responses to calculate Spearman's rank correlation for the current filters.")
 
     tabs=st.tabs(["Research questions","Descriptive statistics","Group comparisons","Method & limitations"])
 
@@ -484,8 +614,11 @@ else:
         with q2:
             st.caption("Most selected challenges")
             st.dataframe(ch_tbl.head(5).rename(columns={"Response":"Challenge"}),hide_index=True,use_container_width=True)
+        if not ben_tbl.empty and not ch_tbl.empty:
+            top_benefit, top_challenge = ben_tbl.iloc[0], ch_tbl.iloc[0]
+            st.markdown(f"**Interpretation:** The most frequently reported benefit is **{top_benefit['Response']}** ({int(top_benefit['Students'])} selections), while the most frequently reported challenge is **{top_challenge['Response']}** ({int(top_challenge['Students'])} selections). These results show that students can experience both practical benefits and concerns when using AI tools.")
         st.markdown("**RQ5. Is there a relationship between AI tool usage and perceived satisfaction or usefulness?**")
-        st.write("The Spearman relationship test is displayed above. It examines usage frequency and satisfaction. Perceived usefulness is summarized in the descriptive statistics.")
+        st.write("The two Spearman analyses above examine whether AI usage frequency is associated with students’ satisfaction and perceived usefulness. Both results are interpreted using α = 0.05; neither test establishes cause and effect.")
 
     with tabs[1]:
         section("Descriptive statistics","Mean, median, mode, range, variance and standard deviation for numeric variables.")
@@ -526,6 +659,10 @@ else:
         counts=filtered.groupby(group_by,observed=True).size().rename("Respondents").reset_index()
         grouped=grouped.merge(counts,on=group_by)
         st.dataframe(grouped.rename(columns={group_by:"Group",**labels}).round(2),hide_index=True,use_container_width=True)
+        if not grouped.empty:
+            highest_hours = grouped.loc[grouped["hours_per_week"].idxmax()]
+            highest_sat = grouped.loc[grouped["satisfaction"].idxmax()]
+            st.markdown(f"**Group insight:** {highest_hours[group_by]} has the highest average weekly AI usage ({highest_hours['hours_per_week']:.2f} hours), while {highest_sat[group_by]} has the highest average satisfaction ({highest_sat['satisfaction']:.2f}/5). These are descriptive differences only; they do not establish statistically significant group differences.")
         metric=st.selectbox("Visualize measure",measures,index=1,format_func=lambda x:labels[x])
         fig=px.bar(grouped,x=group_by,y=metric,color=group_by,text=metric,
                    color_discrete_sequence=PALETTE,title=f"{labels[metric]} by {group_by.replace('_',' ')}",
@@ -538,6 +675,17 @@ else:
 
     with tabs[3]:
         section("Methodology and interpretation notes")
+        st.markdown("**Data quality summary · cleaned dataset**")
+        quality = pd.DataFrame({
+            "Check": ["Records", "Variables", "Missing cells", "Duplicate rows", "Duplicate student IDs"],
+            "Result": [
+                len(df), len(df.columns), int(df.isna().sum().sum()),
+                int(df.duplicated().sum()),
+                int(df["student_id"].duplicated().sum()) if "student_id" in df.columns else "Not available"
+            ]
+        })
+        st.dataframe(quality, hide_index=True, use_container_width=True)
+        st.caption("The source survey contained 210 records; the cleaned dataset used here contains 182 records. The reasons for excluding records should be explained using the group's data-cleaning notebook.")
         st.markdown("""
 **Dataset and sample**
 - The original survey file contains 210 records; the cleaned dataset supplied for analysis contains 182 records.
@@ -551,7 +699,8 @@ else:
 **Statistical approach**
 - Frequencies and percentages summarize categorical responses.
 - Mean, median, mode, variance and standard deviation summarize numerical and rating variables.
-- Spearman's rank correlation is used for the ordinal usage-frequency score and satisfaction rating.
+- Spearman's rank correlation examines the association between the ordinal usage-frequency score and both satisfaction and perceived usefulness.
+- A simple least-squares linear model, calculated with NumPy, estimates satisfaction from weekly AI usage hours using an 80/20 train-test split.
 
 **Limitations**
 - The sample may not represent all college students.
@@ -559,6 +708,7 @@ else:
 - Correlation indicates association, not cause and effect.
 - Filtered results describe only the respondents remaining after the selected filters.
         """)
+        st.markdown("**Visualization note:** Matplotlib is used in the analysis workflow/PPT visualizations. Plotly is used in this Streamlit dashboard to make the displayed charts interactive. Both are Python visualization libraries.")
         st.markdown("**Data cleaning note:** weekly usage-hour outliers are not deleted from the dataset. The app preserves the original values; an IQR-capped version is used only for the dashboard's academic-year box plot.")
 
     st.markdown("---")

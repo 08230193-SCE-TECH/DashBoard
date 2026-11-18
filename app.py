@@ -174,22 +174,15 @@ def load_data(uploaded_bytes=None):
     data["programme_level"] = data["program"].apply(programme_level)
     return data
 
-# allow a CSV upload if app and dataset are not in the same folder
 with st.sidebar:
     st.markdown("## AI RESEARCH HUB")
     st.caption("PRG405 · Introduction to Data Science")
     nav = st.radio("NAVIGATION", ["Dashboard", "Research Analysis"], index=0)
-    st.markdown("---")
-    st.markdown("### DATA SOURCE")
-    uploaded_csv = st.file_uploader("Or upload your cleaned CSV", type=["csv"])
 
-df = load_data(uploaded_csv.getvalue() if uploaded_csv is not None else None)
+df = load_data()
 if df is None:
-    st.warning("Place **cleaned_ai_student_data (2).csv** in the same folder as this app, or upload the cleaned CSV in the sidebar.")
+    st.warning("Place **cleaned_ai_student_data (2).csv** in the same folder as this app.")
     st.stop()
-
-with st.sidebar:
-    st.caption(f"Loaded dataset: {len(df):,} records")
 
 # --------------------------- FILTERS ---------------------------
 with st.sidebar:
